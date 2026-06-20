@@ -1,39 +1,38 @@
-# ADR-0004 — Verzicht auf private APIs / Legacy-Bundle-Injection
+# ADR-0004 — No private APIs / legacy bundle injection
 
 - Status: accepted
-- Datum: 2026-06-17
+- Date: 2026-06-17
 
-## Kontext
+## Context
 
-Echte Toolbar-Buttons in Apple Mail waren früher nur über Legacy-Mail-
-Bundles (Code-Injection in den Mail.app-Prozess) möglich. Seit macOS
-Sonoma (14) hat Apple den Plugin-Loader **entfernt**; Mail.app lädt
-keine Bundles mehr. Injection auf aktuellem macOS erfordert das
-dauerhafte Deaktivieren von **SIP** und **Library Validation/AMFI**
-sowie laufendes Reverse-Engineering nach jedem macOS-Update.
+Real toolbar buttons in Apple Mail used to be possible only via legacy Mail
+bundles (code injection into the Mail.app process). Since macOS Sonoma (14)
+Apple **removed** the plugin loader; Mail.app no longer loads bundles. Injection
+on current macOS would require permanently disabling **SIP** and **Library
+Validation/AMFI**, plus ongoing reverse-engineering after every macOS update.
 
-Die Nutzung ist privat, MIT, „at own risk" — technisch *möglich* wäre
-ein Injection-Weg also denkbar.
+The tool is private, MIT, "at own risk", so an injection path would be
+technically *possible*.
 
-## Entscheidung
+## Decision
 
-Wir verzichten bewusst auf private APIs und Bundle-Injection.
+We deliberately avoid private APIs and bundle injection entirely.
 
-## Begründung
+## Rationale
 
-- **Systemweite Sicherheitsschwächung** (SIP/AMFI aus) ist
-  unverhältnismäßig für ein QoL-Tool.
-- **Hohe Fragilität**: bricht bei jedem macOS-Point-Release; ständiges
-  Neu-Reversen interner View-Hierarchien.
-- **Crash-Risiko im produktiven Mailprogramm.**
-- Qualitätsziel Q3 (Update-Stabilität) wäre nicht erreichbar.
+- **System-wide security weakening** (turning SIP/AMFI off) is disproportionate
+  for a quality-of-life tool.
+- **High fragility**: would break on every macOS point release and require
+  constant re-reversing of internal view hierarchies.
+- **Crash risk inside the production mail client.**
+- Quality goal Q3 (update stability) would be unachievable.
 
-Der AX-Overlay-Weg (ADR-0003) liefert ~95 % des „echte Buttons"-
-Erlebnisses ohne diese Kosten.
+## Consequences
 
-## Konsequenzen
-
-- Keine Buttons in Apples *eigener* Toolbar — die Buttons leben im
-  angedockten Overlay-Fenster.
-- Diese Entscheidung kann revidiert werden, falls Apple je wieder
-  offizielle UI-Erweiterungspunkte für Mail anbietet.
+- The final design uses **zero private APIs**. The Mac side is a SwiftUI
+  menu-bar app plus a built-in browser web UI, both thin REST clients over the
+  LAN (ADR-0003). No Accessibility access is needed at all.
+- There are no buttons in Apple's own Mail toolbar, and no overlay window
+  either; list management and review happen in `ScreenerBar` or the web UI.
+- This decision can be revisited if Apple ever offers official UI extension
+  points for Mail.

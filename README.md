@@ -151,6 +151,10 @@ Old mail is moved out of the way automatically (set any window to `0` to disable
 > The API is reachable on your LAN guarded only by the Bearer token — keep
 > `API_TOKEN` long and secret, and don't expose port 8443 to the public internet.
 
+| Lists | Suggestions | Settings |
+|-------|-------------|----------|
+| ![Lists](docs/images/web-ui-lists.png) | ![Suggestions](docs/images/web-ui-suggestions.png) | ![Settings](docs/images/web-ui-settings.png) |
+
 ---
 
 ## 🔧 Customization

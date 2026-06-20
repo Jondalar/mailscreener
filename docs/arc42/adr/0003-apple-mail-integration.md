@@ -1,44 +1,53 @@
-# ADR-0003 — Apple-Mail-Integration: MailKit + AX-Overlay-Companion-App
+# ADR-0003 — Mac client: menu-bar app + built-in web UI
 
-- Status: accepted
-- Datum: 2026-06-17
+- Status: accepted (supersedes the earlier MailKit + AX-overlay plan)
+- Date: 2026-06-17
 
-## Kontext
+## Context
 
-Gewünscht sind echte Buttons in Apple Mail für „Approve/Block/
-Newsletter/Receipt" sowie eine Listenverwaltung. Apple bietet keine
-API, um Buttons in Mails eigene Toolbar einzufügen (siehe C3/C4,
-ADR-0004). Referenz Mailbutler löst das über eine angedockte Sidebar +
-MailKit, nicht über echte Toolbar-Buttons.
+We want a convenient way to manage lists and review screened mail from the Mac.
+Apple offers no supported API to add buttons to Mail's own toolbar (see ADR-0004).
 
-## Entscheidung
+An earlier plan tried to approximate "real buttons" in Apple Mail with a MailKit
+extension (`MEMessageActionHandler`) for auto-screening the INBOX plus an
+Accessibility (AX) overlay window that floated transparent buttons over Mail's
+toolbar, driven by AppleScript/JXA. That approach was **dropped**: it was
+complex and fragile across macOS point releases (AX hierarchies and automation
+permissions keep shifting), and not worth the cost for a personal tool.
 
-Die Integration besteht aus drei unterstützten Bausteinen:
+In the meantime the daemon screens the INBOX itself (ADR-0002), so no in-Mail
+auto-screening component is needed at all.
 
-1. **MailKit-Extension** (`MEMessageActionHandler`) für automatisches
-   Screening neuer **INBOX**-Mails.
-2. **Companion-App** (`ScreenerBar`) mit Menüleisten-UI zur
-   Listenverwaltung **und** einem **Accessibility-Overlay**, das ein
-   eigenes, transparentes Button-Fenster über Mails Toolbar
-   positioniert (sieht aus wie native Buttons).
-3. **AppleScript/JXA** für die eigentliche Aktion auf der in Mail
-   selektierten Nachricht (lesen des Absenders, Verschieben), plus
-   API-Call an `screenerd`.
+## Decision
 
-Zusätzlich bleibt **Ordner-Move-Training** als robuster, plattform-
-übergreifender Pfad (funktioniert auch auf dem iPhone).
+The Mac side is delivered as two thin clients over the daemon's REST API, with
+**no Apple Mail integration** and **no private APIs**:
 
-## Begründung
+1. **`ScreenerBar`** — a SwiftUI **menu-bar app** (envelope/mail menu-bar icon)
+   for status, list management, and reviewing suggestions.
+2. **Built-in web UI** — a self-contained browser UI served by the daemon at the
+   API root (`/`). The page is unauthenticated and carries no secrets; it stores
+   the Bearer token in browser `localStorage` and sends it on every API call.
 
-- Kommt „echten Buttons" optisch sehr nahe, **ohne** SIP/AMFI-Eingriff.
-- Nutzt ausschließlich unterstützte APIs → update-stabil (Q3).
-- Mit Developer-ID signier-/notarisierbar, kein App Store nötig (C6).
+Both share a thin Swift package, **`ScreenerKit`** (typed REST client + DTOs +
+Keychain), and talk to the daemon over the LAN.
 
-## Konsequenzen
+Folder-move training remains the robust, cross-platform path: the user simply
+moves mail between folders and the daemon learns on the next sweep. This works
+from any client, including the iPhone.
 
-- App braucht Accessibility- und Automation-Berechtigungen (vom Nutzer
-  einmalig erteilt).
-- Overlay-Anker müssen robust über die AX-Hierarchie gefunden werden,
-  nicht über feste Pixelkoordinaten.
-- Fallback auf reines Ordner-Move-Training, falls AppleScript/AX
-  künftig eingeschränkt wird.
+## Rationale
+
+- Zero Apple private APIs and zero in-process injection → update-stable (Q3).
+- Far simpler and more robust than the AX overlay / MailKit approach.
+- The built-in web UI gives a usable interface from any device with a browser,
+  with no install required.
+- `ScreenerBar` can be signed/notarized with a Developer ID; no App Store
+  needed (personal tool, App Sandbox off).
+
+## Consequences
+
+- The Mac never reads or moves mail itself; it only calls the REST API. All
+  classification and IMAP side effects stay in the daemon.
+- The dropped overlay/MailKit approach is recorded here as superseded; see
+  ADR-0004 for why private-API paths were rejected.

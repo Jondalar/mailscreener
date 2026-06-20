@@ -1,43 +1,47 @@
-# ADR-0005 — Reine, deterministische Klassifikations-Engine
+# ADR-0005 — Pure, deterministic classification engine
 
 - Status: accepted
-- Datum: 2026-06-17
+- Date: 2026-06-17
 
-## Kontext
+## Context
 
-Die Korrektheit der Klassifikation ist ein Top-Qualitätsziel (Q4: kein
-freigegebener Absender landet je im Müll). Logik, die mit IMAP-I/O
-vermischt ist, lässt sich schlecht testen.
+Classification correctness is a top quality goal (Q4: an approved sender must
+never end up in the junk). Logic that is intertwined with IMAP I/O is hard to
+test.
 
-## Entscheidung
+## Decision
 
-Die Klassifikation (`internal/classify`) ist eine **reine Funktion**
-ohne Seiteneffekte:
+Classification (`internal/classify`) is a **pure function** with no side
+effects:
 
 ```
-Classify(sender, lists) -> Verdict
+Classify(sender, headers, Snapshot) -> Verdict
 ```
 
-I/O (IMAP, Persistenz, API) liegt ausschließlich in den umgebenden
-Modulen.
+All I/O (IMAP, persistence, API) lives exclusively in the surrounding modules.
+The engine is handed an in-memory `Snapshot` of the lists; it never reads from
+disk itself.
 
-## Regeln (deterministisch)
+## Rules (deterministic, first match wins)
 
-1. **Whitelist** trifft zu → `approve` (hat Vorrang vor Blocklist).
-2. **Blocklist** trifft zu → `block`.
-3. **Newsletter-Liste** trifft zu → `newsletter`.
-4. **Receipts-Liste** trifft zu → `receipt`.
-5. sonst → `unknown` (bleibt im Screener).
+1. **Whitelist** matches → `approve` (always wins over the blocklist).
+2. **Group** (mailing-list / `List-*` / `X-Google-Group` headers) → `block`,
+   unless the sender is on the `group_allowlist`.
+3. **Blocklist** matches → `block`.
+4. **Newsletter** (list membership OR `List-Id`/`List-Unsubscribe` header) →
+   `newsletter`.
+5. **Receipt** (list membership) → `receipt`.
+6. otherwise → `unknown` (stays in the screener).
 
-Matching: exakte Adresse vor optionaler Domain-Regel.
+Matching is exact address plus optional `*@domain` wildcard. There is no
+subject-keyword routing by default (determinism).
 
-## Begründung
+## Rationale
 
-- Voll unit-testbar (Tabellen-Tests), inkl. Konfliktfälle (QS3).
-- Verhalten unabhängig von Netzwerk/Server reproduzierbar.
+- Fully unit-testable (table tests), including conflict cases.
+- Behavior is reproducible independent of network/server.
 
-## Konsequenzen
+## Consequences
 
-- Engine bekommt eine `Lists`-Momentaufnahme injiziert, liest nicht
-  selbst von der Platte.
-- Neue Verdict-Typen erfordern nur Erweiterung der Engine + Tests.
+- New routing signals belong in headers/lists, not in subject heuristics.
+- New verdict types require only extending the engine plus tests.

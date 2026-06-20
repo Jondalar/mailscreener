@@ -1,36 +1,41 @@
-# ADR-0001 — Go + Docker für den Daemon
+# ADR-0001 — Go + Docker for the daemon
 
 - Status: accepted
-- Datum: 2026-06-17
+- Date: 2026-06-17
 
-## Kontext
+## Context
 
-Das bestehende Setup nutzt imapfilter (Lua) in einem 600-s-Polling-Loop.
-Gesucht ist ein robuster, lange laufender Daemon, der auf NAS/Linux per
-Docker betrieben wird, klein und wartbar ist und IMAP IDLE beherrscht.
+The existing setup uses imapfilter (Lua) in a 600 s polling loop. We need a
+robust, long-running daemon that runs on a NAS/Linux host via Docker, stays
+small and maintainable, and speaks IMAP IDLE.
 
-## Entscheidung
+## Decision
 
-Wir implementieren den Daemon (`screenerd`) in **Go** und verteilen ihn
-als **Docker-Image** (Multi-Stage-Build → minimaler Base wie
-`distroless`/`scratch`).
+We implement the daemon (`screenerd`) in **Go** and ship it as a **Docker
+image** (multi-stage build → minimal base such as `distroless`/`scratch`).
 
-## Begründung
+## Rationale
 
-- Statisches Binary → winziges, reproduzierbares Image, einfache Deployments.
-- Ausgereifte IMAP-Bibliotheken inkl. IDLE (z. B. `go-imap`).
-- Starke Standardbibliothek für HTTP-API, gutes Nebenläufigkeitsmodell
-  für eine dauerhafte IDLE-Verbindung + API-Server.
-- Einfaches Cross-Compiling für NAS-Architekturen (amd64/arm64).
+- Static, CGO-free binary (`modernc.org/sqlite`) → tiny, reproducible image,
+  simple deployments.
+- Mature IMAP libraries with IDLE support (`go-imap/v2`).
+- Strong standard library for the HTTP API and a good concurrency model for a
+  long-lived IDLE connection plus an API server.
+- Easy cross-compiling for NAS architectures (amd64/arm64).
 
-## Alternativen
+## Alternatives
 
-- **Rust**: maximale Robustheit, aber langsamere Iteration.
-- **Python**: nah am Skript-Ursprung, aber größeres Image, mehr
-  Laufzeitabhängigkeiten.
-- **Bei Lua/imapfilter bleiben**: kein IDLE, schwer testbar, begrenzte API.
+- **Rust**: maximum robustness, but slower iteration.
+- **Python**: closer to the script origin, but larger image and more runtime
+  dependencies.
+- **Stay on Lua/imapfilter**: no IDLE, hard to test, limited API surface.
 
-## Konsequenzen
+## Consequences
 
-- Go-Toolchain + Standard-Projektlayout (`cmd/`, `internal/`).
-- CI für Build/Test/Lint und Image-Build nötig.
+- Go toolchain + standard project layout (`cmd/`, `internal/`).
+- Build is pure-Go / CGO-free, so production cross-compiles statically:
+  `CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build ./cmd/screenerd`.
+- Deployed and running in production on a QNAP NAS. Because git is not
+  installed on the NAS, the deploy procedure is: cross-compile on the Mac → scp
+  the binary to the NAS → `docker compose build && up -d`. The container listens
+  on 8443, published on host port 18443.
