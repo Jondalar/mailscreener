@@ -1,0 +1,20 @@
+# Build artifacts
+/bin/
+/dist/
+screenerd
+
+# Local state / secrets
+/state/
+*.env
+.env
+
+# Local-only project notes
+CLAUDE.md
+
+# OS
+.DS_Store
+
+# Go
+*.test
+*.out
+coverage.*

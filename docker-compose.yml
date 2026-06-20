@@ -1,0 +1,23 @@
+services:
+  screenerd:
+    build:
+      context: .
+      args:
+        VERSION: dev
+    container_name: screenerd
+    restart: unless-stopped
+    # All configuration comes from .env (copy .env.example -> .env). Every key in
+    # that file reaches the container, so FOLDER_*, *_RETENTION, SNOOZE_LABELS etc.
+    # just work.
+    env_file:
+      - .env
+    environment:
+      - TZ=Europe/Berlin
+      # Inside the container the daemon must bind all interfaces, otherwise the
+      # published port below can't reach it. The Bearer token still guards every
+      # request. This exposes the API on your LAN — keep API_TOKEN secret.
+      - API_ADDR=0.0.0.0:8443
+    ports:
+      - "8443:8443"
+    volumes:
+      - ./state:/state

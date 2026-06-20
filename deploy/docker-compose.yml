@@ -1,0 +1,18 @@
+services:
+  screenerd:
+    build: .
+    container_name: screenerd
+    restart: always
+    environment:
+      - TZ=Europe/Berlin
+      - ICLOUD_USER=${ICLOUD_USER}
+      - ICLOUD_APP_PASSWORD=${ICLOUD_APP_PASSWORD}
+      - SCREENED_FOLDER=Screened
+      - API_TOKEN=${API_TOKEN}
+      - API_ADDR=0.0.0.0:8443
+      - IDLE_TIMEOUT=1500s
+      - SWEEP_INTERVAL=10m
+    ports:
+      - "18443:8443"   # host 18443 -> container API 8443 (8443 taken on the NAS)
+    volumes:
+      - ./state:/state

@@ -1,0 +1,40 @@
+name: ScreenerBar
+options:
+  bundleIdPrefix: me.damhuis.screener
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  ScreenerKit:
+    path: ScreenerKit
+
+targets:
+  ScreenerBar:
+    type: application
+    platform: macOS
+    sources:
+      - ScreenerBar/Sources
+    dependencies:
+      - package: ScreenerKit
+    info:
+      path: ScreenerBar/Info.plist
+      properties:
+        LSUIElement: true
+        NSLocalNetworkUsageDescription: ScreenerBar talks to the screenerd daemon on your local network (e.g. your NAS).
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: me.damhuis.screener.bar
+        PRODUCT_NAME: ScreenerBar
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        SWIFT_VERSION: "6.0"
+        SWIFT_STRICT_CONCURRENCY: complete
+        CODE_SIGN_STYLE: Automatic
+        ENABLE_HARDENED_RUNTIME: YES
+        # No App Sandbox: keeps LAN HTTP simple now and leaves room for the
+        # later Accessibility-overlay work (Step 2).
+        ENABLE_APP_SANDBOX: NO
