@@ -62,8 +62,8 @@ func (cl *Client) signal() {
 // EnsureFolders creates and subscribes the given mailboxes (idempotent).
 func (cl *Client) EnsureFolders(names []string) error {
 	for _, n := range names {
-		cl.c.Create(n, nil).Wait()    // ALREADYEXISTS is fine
-		cl.c.Subscribe(n).Wait()      // best-effort
+		cl.c.Create(n, nil).Wait() // ALREADYEXISTS is fine
+		cl.c.Subscribe(n).Wait()   // best-effort
 	}
 	return nil
 }
@@ -169,15 +169,39 @@ func (cl *Client) ListChildren(parent string) ([]string, error) {
 }
 
 // Move moves messages by UID to dest.
-func (cl *Client) Move(folder string, uids []uint32, dest string) error {
+func (cl *Client) Move(folder string, uids []uint32, dest string) (map[uint32]uint32, error) {
 	if len(uids) == 0 {
-		return nil
+		return nil, nil
 	}
 	if _, err := cl.selectMailbox(folder); err != nil {
-		return err
+		return nil, err
 	}
-	_, err := cl.c.Move(toUIDSet(uids), dest).Wait()
-	return err
+	data, err := cl.c.Move(toUIDSet(uids), dest).Wait()
+	if err != nil {
+		return nil, err
+	}
+	// Map each source UID to its new dest UID from the COPYUID response. The two
+	// sets correspond in order (RFC 4315); some servers omit them (empty map).
+	mapping := map[uint32]uint32{}
+	if data != nil {
+		src, okS := uidNums(data.SourceUIDs)
+		dst, okD := uidNums(data.DestUIDs)
+		if okS && okD && len(src) == len(dst) {
+			for i := range src {
+				mapping[uint32(src[i])] = uint32(dst[i])
+			}
+		}
+	}
+	return mapping, nil
+}
+
+// uidNums expands a NumSet to its UIDs when it is a static UIDSet.
+func uidNums(ns imap.NumSet) ([]imap.UID, bool) {
+	us, ok := ns.(imap.UIDSet)
+	if !ok {
+		return nil, false
+	}
+	return us.Nums()
 }
 
 // MarkSeen sets the \Seen flag.

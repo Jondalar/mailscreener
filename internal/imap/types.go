@@ -16,8 +16,8 @@ import (
 type Msg struct {
 	UID     uint32
 	Folder  string
-	Sender  string   // parsed From/Sender/Return-Path, lowercased
-	MID     string   // Message-ID without angle brackets, lowercased
+	Sender  string // parsed From/Sender/Return-Path, lowercased
+	MID     string // Message-ID without angle brackets, lowercased
 	Date    time.Time
 	Flags   []string // IMAP flags/keywords (e.g. legacy SNOOZED_1W)
 	Headers classify.Headers
@@ -71,8 +71,10 @@ type Backend interface {
 	ListOlderThan(folder string, d time.Duration) ([]Msg, error)
 	// ListChildren returns child mailbox names under parent (e.g. "Snoozed/1w").
 	ListChildren(parent string) ([]string, error)
-	// Move moves messages by UID to dest.
-	Move(folder string, uids []uint32, dest string) error
+	// Move moves messages by UID to dest. It returns a source→dest UID map from
+	// the server's COPYUID/MOVE response (UIDPLUS); the map may be empty if the
+	// server doesn't report it.
+	Move(folder string, uids []uint32, dest string) (map[uint32]uint32, error)
 	// MarkSeen / ClearSeen toggle the \Seen flag.
 	MarkSeen(folder string, uids []uint32) error
 	ClearSeen(folder string, uids []uint32) error

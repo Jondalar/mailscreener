@@ -16,10 +16,11 @@ import (
 type fakeBackend struct {
 	folders map[string][]Msg
 	seen    map[string]map[uint32]bool
+	uidSeq  uint32 // models IMAP UID reassignment on MOVE
 }
 
 func newFake() *fakeBackend {
-	return &fakeBackend{folders: map[string][]Msg{}, seen: map[string]map[uint32]bool{}}
+	return &fakeBackend{folders: map[string][]Msg{}, seen: map[string]map[uint32]bool{}, uidSeq: 1000}
 }
 
 func (b *fakeBackend) add(folder string, m Msg) {
@@ -71,22 +72,40 @@ func (b *fakeBackend) ListChildren(parent string) ([]string, error) {
 	return out, nil
 }
 
-func (b *fakeBackend) Move(folder string, ids []uint32, dest string) error {
+// Move models a real IMAP MOVE: the message gets a NEW UID in the destination
+// (returned as a source→dest map), and its \Seen flag travels with it.
+func (b *fakeBackend) Move(folder string, ids []uint32, dest string) (map[uint32]uint32, error) {
 	want := map[uint32]bool{}
 	for _, id := range ids {
 		want[id] = true
 	}
+	mapping := map[uint32]uint32{}
 	var keep []Msg
 	for _, m := range b.folders[folder] {
-		if want[m.UID] {
-			m.Folder = dest
-			b.folders[dest] = append(b.folders[dest], m)
-		} else {
+		if !want[m.UID] {
 			keep = append(keep, m)
+			continue
+		}
+		old := m.UID
+		b.uidSeq++
+		nu := b.uidSeq
+		mapping[old] = nu
+		wasSeen := b.seen[folder] != nil && b.seen[folder][old]
+		if b.seen[folder] != nil {
+			delete(b.seen[folder], old)
+		}
+		m.UID = nu
+		m.Folder = dest
+		b.folders[dest] = append(b.folders[dest], m)
+		if wasSeen {
+			if b.seen[dest] == nil {
+				b.seen[dest] = map[uint32]bool{}
+			}
+			b.seen[dest][nu] = true
 		}
 	}
 	b.folders[folder] = keep
-	return nil
+	return mapping, nil
 }
 
 func (b *fakeBackend) MarkSeen(folder string, ids []uint32) error {
@@ -128,6 +147,17 @@ func folderUIDs(b *fakeBackend, folder string) []uint32 {
 		out = append(out, m.UID)
 	}
 	return out
+}
+
+// hasSender reports whether folder contains a message from sender (used instead
+// of UID assertions for moved messages, whose UID is reassigned by Move).
+func hasSender(b *fakeBackend, folder, sender string) bool {
+	for _, m := range b.folders[folder] {
+		if m.Sender == sender {
+			return true
+		}
+	}
+	return false
 }
 
 func TestMaintenanceAgesNewslettersAndReceipts(t *testing.T) {
@@ -175,17 +205,17 @@ func TestSortScreened(t *testing.T) {
 	if err := e.sortScreened(); err != nil {
 		t.Fatal(err)
 	}
-	if got := folderUIDs(be, "INBOX"); len(got) != 1 || got[0] != 1 {
-		t.Errorf("INBOX = %v, want [1]", got)
+	if got := folderUIDs(be, "INBOX"); len(got) != 1 || !hasSender(be, "INBOX", "wl@x.com") {
+		t.Errorf("INBOX = %v, want [wl@x.com]", got)
 	}
-	if got := folderUIDs(be, "Junk"); len(got) != 1 || got[0] != 2 {
-		t.Errorf("Junk = %v, want [2]", got)
+	if got := folderUIDs(be, "Junk"); len(got) != 1 || !hasSender(be, "Junk", "bl@y.com") {
+		t.Errorf("Junk = %v, want [bl@y.com]", got)
 	}
-	if got := folderUIDs(be, "Newsletters"); len(got) != 1 || got[0] != 3 {
-		t.Errorf("Newsletters = %v, want [3]", got)
+	if got := folderUIDs(be, "Newsletters"); len(got) != 1 || !hasSender(be, "Newsletters", "n@z.com") {
+		t.Errorf("Newsletters = %v, want [n@z.com]", got)
 	}
-	if got := folderUIDs(be, "Receipts"); len(got) != 1 || got[0] != 4 {
-		t.Errorf("Receipts = %v, want [4]", got)
+	if got := folderUIDs(be, "Receipts"); len(got) != 1 || !hasSender(be, "Receipts", "shop@s.com") {
+		t.Errorf("Receipts = %v, want [shop@s.com]", got)
 	}
 	if got := folderUIDs(be, "Screened"); len(got) != 1 || got[0] != 5 {
 		t.Errorf("Screened (unknown stays) = %v, want [5]", got)
@@ -197,8 +227,8 @@ func TestSortScreened(t *testing.T) {
 
 func TestCatchUpInbox(t *testing.T) {
 	be := newFake()
-	be.add("INBOX", Msg{UID: 1, Sender: "bl@y.com"})            // block -> Junk
-	be.add("INBOX", Msg{UID: 2, Sender: "wl@x.com"})            // approve -> stay
+	be.add("INBOX", Msg{UID: 1, Sender: "bl@y.com"})                 // block -> Junk
+	be.add("INBOX", Msg{UID: 2, Sender: "wl@x.com"})                 // approve -> stay
 	be.add("INBOX", Msg{UID: 3, Sender: "new@q.com", MID: "<m3@q>"}) // -> Screened
 
 	e, st := newEngine(t, be)
@@ -208,14 +238,14 @@ func TestCatchUpInbox(t *testing.T) {
 	if err := e.catchUpInbox(); err != nil {
 		t.Fatal(err)
 	}
-	if got := folderUIDs(be, "Junk"); len(got) != 1 || got[0] != 1 {
-		t.Errorf("Junk = %v, want [1]", got)
+	if got := folderUIDs(be, "Junk"); len(got) != 1 || !hasSender(be, "Junk", "bl@y.com") {
+		t.Errorf("Junk = %v, want [bl@y.com]", got)
 	}
 	if got := folderUIDs(be, "INBOX"); len(got) != 1 || got[0] != 2 {
-		t.Errorf("INBOX = %v, want [2]", got)
+		t.Errorf("INBOX = %v, want [2] (wl@x.com stays)", got)
 	}
-	if got := folderUIDs(be, "Screened"); len(got) != 1 || got[0] != 3 {
-		t.Errorf("Screened = %v, want [3]", got)
+	if got := folderUIDs(be, "Screened"); len(got) != 1 || !hasSender(be, "Screened", "new@q.com") {
+		t.Errorf("Screened = %v, want [new@q.com]", got)
 	}
 	if ok, _ := st.WasScreened("<m3@q>"); !ok {
 		t.Error("screened MID not tracked")
@@ -228,7 +258,7 @@ func TestApproveWhitelistsAndUnblocks(t *testing.T) {
 
 	e, st := newEngine(t, be)
 	st.Add(lists.Blocklist, "person@x.com", "seed") // previously blocked
-	st.MarkScreened("<m7@x>")                        // was in Screened before
+	st.MarkScreened("<m7@x>")                       // was in Screened before
 
 	if err := e.approve(); err != nil {
 		t.Fatal(err)
@@ -263,7 +293,7 @@ func TestTrainJunkToBlocklist(t *testing.T) {
 
 func TestQuickSweepWatermark(t *testing.T) {
 	be := newFake()
-	be.add("Screened", Msg{UID: 10, Sender: "bl@y.com"})           // block -> Junk
+	be.add("Screened", Msg{UID: 10, Sender: "bl@y.com"})                      // block -> Junk
 	be.add("Screened", Msg{UID: 11, Sender: "unknown@q.com", MID: "<m11@q>"}) // stays
 	e, st := newEngine(t, be)
 	st.Add(lists.Blocklist, "bl@y.com", "seed")
@@ -271,16 +301,17 @@ func TestQuickSweepWatermark(t *testing.T) {
 	if err := e.QuickSweep(); err != nil {
 		t.Fatal(err)
 	}
-	if got := folderUIDs(be, "Junk"); len(got) != 1 || got[0] != 10 {
-		t.Fatalf("Junk = %v, want [10]", got)
+	if got := folderUIDs(be, "Junk"); len(got) != 1 || !hasSender(be, "Junk", "bl@y.com") {
+		t.Fatalf("Junk = %v, want [bl@y.com]", got)
 	}
 	wm, _ := st.Watermark("Screened")
 	if wm != 11 {
 		t.Fatalf("watermark = %d, want 11", wm)
 	}
 
-	// A user moves the unknown mail to Junk (gets a NEW higher UID there).
-	be.add("Junk", Msg{UID: 50, Sender: "later@spam.com", MID: "<m50@s>"})
+	// A user moves the unknown mail to Junk; it arrives with a NEW higher UID
+	// (above the UIDs the Move helper reassigns, mirroring real IMAP).
+	be.add("Junk", Msg{UID: 5000, Sender: "later@spam.com", MID: "<m50@s>"})
 	// Second quick sweep: nothing new in Screened (uid 11 <= watermark),
 	// but the new Junk message trains the blocklist.
 	if err := e.QuickSweep(); err != nil {
@@ -306,11 +337,11 @@ func TestGroupSweepInbox(t *testing.T) {
 	if err := e.groupSweepInbox(); err != nil {
 		t.Fatal(err)
 	}
-	if got := folderUIDs(be, "Junk"); len(got) != 1 || got[0] != 1 {
-		t.Fatalf("Junk = %v, want [1]", got)
+	if got := folderUIDs(be, "Junk"); len(got) != 1 || !hasSender(be, "Junk", "g@x.com") {
+		t.Fatalf("Junk = %v, want [g@x.com]", got)
 	}
 	if got := folderUIDs(be, "INBOX"); len(got) != 2 {
-		t.Fatalf("INBOX = %v, want [2 3]", got)
+		t.Fatalf("INBOX = %v, want 2 (ok@/plain@ stay)", got)
 	}
 }
 
@@ -334,7 +365,7 @@ func TestAdoptLegacySnoozes(t *testing.T) {
 		t.Fatalf("due = %+v, want only uid 5", due)
 	}
 	// Idempotent: second call adopts nothing more (counter guard).
-	st.Unsnooze("Snoozed/1w", 5)
+	st.Unsnooze("Snoozed", 5)
 	if err := e.AdoptLegacySnoozes(dir + "/snoozed_map.txt"); err != nil {
 		t.Fatal(err)
 	}
@@ -360,11 +391,17 @@ func TestSnoozeScanAndWake(t *testing.T) {
 	if err := e.SnoozeScan(); err != nil {
 		t.Fatal(err)
 	}
-	if got := folderUIDs(be, "Snoozed"); len(got) != 1 || got[0] != 1 {
-		t.Fatalf("Snoozed parent = %v, want [1]", got)
+	// Consolidated into the parent (UID reassigned by Move), child emptied.
+	parent := folderUIDs(be, "Snoozed")
+	if len(parent) != 1 || !hasSender(be, "Snoozed", "a@x.com") {
+		t.Fatalf("Snoozed parent = %v, want one msg from a@x.com", parent)
 	}
 	if got := folderUIDs(be, "Snoozed/1w"); len(got) != 0 {
 		t.Fatalf("child not emptied: %v", got)
+	}
+	// The user had read it while it sat in Snoozed.
+	if err := be.MarkSeen("Snoozed", parent); err != nil {
+		t.Fatal(err)
 	}
 	// Not due yet (wake = scan-now + 1w).
 	if err := e.SnoozeWake(); err != nil {
@@ -373,12 +410,24 @@ func TestSnoozeScanAndWake(t *testing.T) {
 	if got := folderUIDs(be, "INBOX"); len(got) != 0 {
 		t.Fatalf("woke too early: %v", got)
 	}
-	// Force due: snooze before the engine's fixed clock (2026-06-17 12:00).
-	st.Snooze("Snoozed/1w", "1w", "<m1@x>", 1, time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC))
+	// Force due: replace the real row (parent folder + reassigned UID) with a
+	// past wake time, before the engine's fixed clock (2026-06-17 12:00).
+	if err := st.Snooze("Snoozed", "1w", "<m1@x>", parent[0], time.Date(2026, 6, 17, 11, 0, 0, 0, time.UTC)); err != nil {
+		t.Fatal(err)
+	}
 	if err := e.SnoozeWake(); err != nil {
 		t.Fatal(err)
 	}
-	if got := folderUIDs(be, "INBOX"); len(got) != 1 || got[0] != 1 {
-		t.Fatalf("INBOX after wake = %v, want [1]", got)
+	if got := folderUIDs(be, "INBOX"); len(got) != 1 || !hasSender(be, "INBOX", "a@x.com") {
+		t.Fatalf("INBOX after wake = %v, want one msg from a@x.com", got)
+	}
+	// Regression: the woken mail must be UNREAD (clear \Seen happens before the
+	// move; with the old clear-after-move it would arrive read).
+	unread, err := be.List("INBOX", true) // unseen only
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(unread) != 1 {
+		t.Fatalf("woken mail not unread: unseen INBOX = %v, want 1", unread)
 	}
 }

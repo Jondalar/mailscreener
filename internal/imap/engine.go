@@ -178,10 +178,11 @@ func (e *Engine) incInbox(snap classify.Snapshot) error {
 			toScreened = append(toScreened, m.UID)
 		}
 	}
-	if err := e.move(e.f.Inbox, toJunk, e.f.Junk); err != nil {
+	if _, err := e.move(e.f.Inbox, toJunk, e.f.Junk); err != nil {
 		return err
 	}
-	return e.move(e.f.Inbox, toScreened, e.f.Screened)
+	_, err = e.move(e.f.Inbox, toScreened, e.f.Screened)
+	return err
 }
 
 // incTrain learns senders from newly moved-in training-folder messages.
@@ -242,7 +243,8 @@ func (e *Engine) groupSweepInbox() error {
 		}
 		toJunk = append(toJunk, m.UID)
 	}
-	return e.move(e.f.Inbox, toJunk, e.f.Junk)
+	_, err = e.move(e.f.Inbox, toJunk, e.f.Junk)
+	return err
 }
 
 // catchUpInbox handles mail that reached INBOX directly (e.g. Hide-My-Mail):
@@ -272,10 +274,11 @@ func (e *Engine) catchUpInbox() error {
 			toScreened = append(toScreened, m.UID)
 		}
 	}
-	if err := e.move(e.f.Inbox, toJunk, e.f.Junk); err != nil {
+	if _, err := e.move(e.f.Inbox, toJunk, e.f.Junk); err != nil {
 		return err
 	}
-	return e.move(e.f.Inbox, toScreened, e.f.Screened)
+	_, err = e.move(e.f.Inbox, toScreened, e.f.Screened)
+	return err
 }
 
 // sortScreened classifies everything in Screened and routes it (full tier).
@@ -320,7 +323,7 @@ func (e *Engine) routeScreened(msgs []Msg, snap classify.Snapshot) error {
 	}{
 		{toInbox, e.f.Inbox}, {toJunk, e.f.Junk}, {toNews, e.f.Newsletters}, {toRcpt, e.f.Receipts},
 	} {
-		if err := e.move(e.f.Screened, mv.uids, mv.dest); err != nil {
+		if _, err := e.move(e.f.Screened, mv.uids, mv.dest); err != nil {
 			return err
 		}
 	}
@@ -420,7 +423,7 @@ func (e *Engine) maintenance() error {
 		if err != nil {
 			return err
 		}
-		if err := e.move(e.f.Junk, uids(old), e.f.Deleted); err != nil {
+		if _, err := e.move(e.f.Junk, uids(old), e.f.Deleted); err != nil {
 			return err
 		}
 	}
@@ -429,7 +432,7 @@ func (e *Engine) maintenance() error {
 		if err != nil {
 			return err
 		}
-		if err := e.move(e.f.Receipts, uids(old), e.f.Archive); err != nil {
+		if _, err := e.move(e.f.Receipts, uids(old), e.f.Archive); err != nil {
 			return err
 		}
 	}
@@ -443,7 +446,7 @@ func (e *Engine) maintenance() error {
 		if err != nil {
 			return err
 		}
-		if err := e.move(e.f.Newsletters, uids(old), e.f.Archive); err != nil {
+		if _, err := e.move(e.f.Newsletters, uids(old), e.f.Archive); err != nil {
 			return err
 		}
 	}
@@ -473,13 +476,21 @@ func (e *Engine) SnoozeScan() error {
 		if err != nil {
 			return err
 		}
+		// Consolidate into the parent Snoozed folder first; the move reassigns
+		// UIDs, so record each row against its NEW parent UID (from COPYUID).
+		// Without that, SnoozeWake would later move by a stale child UID.
+		newUIDs, err := e.move(child, uids(msgs), e.f.Snoozed)
+		if err != nil {
+			return err
+		}
 		for _, m := range msgs {
-			if err := e.st.Snooze(child, label, m.MID, m.UID, wake); err != nil {
+			uid := m.UID
+			if nu, ok := newUIDs[m.UID]; ok {
+				uid = nu
+			}
+			if err := e.st.Snooze(e.f.Snoozed, label, m.MID, uid, wake); err != nil {
 				return err
 			}
-		}
-		if err := e.move(child, uids(msgs), e.f.Snoozed); err != nil {
-			return err
 		}
 		if len(msgs) > 0 {
 			e.log.Info("snoozed", "folder", child, "count", len(msgs), "wake", wake)
@@ -520,14 +531,17 @@ func (e *Engine) AdoptLegacySnoozes(mapPath string) error {
 		if label == "" {
 			continue // v2 snooze (DB-tracked) or unrelated mail
 		}
-		folder := e.f.Snoozed + "/" + label
-		wake, ok := legacy[folder]
+		// The legacy map is keyed by the old child-folder string, but the message
+		// physically sits in the parent Snoozed folder — store the row against the
+		// parent (folder + UID) so SnoozeWake moves the right message.
+		mapKey := e.f.Snoozed + "/" + label
+		wake, ok := legacy[mapKey]
 		if !ok {
 			if wake, ok = snooze.ParseLabel(label, e.now()); !ok {
 				continue
 			}
 		}
-		if err := e.st.Snooze(folder, label, m.MID, m.UID, wake); err != nil {
+		if err := e.st.Snooze(e.f.Snoozed, label, m.MID, m.UID, wake); err != nil {
 			return err
 		}
 		adopted++
@@ -541,39 +555,46 @@ func (e *Engine) AdoptLegacySnoozes(mapPath string) error {
 	return nil
 }
 
-// SnoozeWake moves due messages back to INBOX as unread.
+// SnoozeWake moves due messages back to INBOX as unread. Each row carries the
+// folder + UID where the message currently sits (the parent Snoozed for v2
+// snoozes, recorded post-consolidation; the same for legacy-adopted ones), so
+// the move and the unread-flag clear both target the right message.
 func (e *Engine) SnoozeWake() error {
 	due, err := e.st.DueSnoozes(e.now())
 	if err != nil {
 		return err
 	}
-	var ids []uint32
+	woke := 0
 	for _, d := range due {
-		ids = append(ids, d.UID)
-	}
-	if len(ids) == 0 {
-		return nil
-	}
-	if err := e.move(e.f.Snoozed, ids, e.f.Inbox); err != nil {
-		return err
-	}
-	if err := e.be.ClearSeen(e.f.Inbox, ids); err != nil {
-		e.log.Warn("clear seen after wake failed", "err", err)
-	}
-	for _, d := range due {
+		ids := []uint32{d.UID}
+		// Clear \Seen *before* the move: an IMAP MOVE reassigns the UID in the
+		// destination, so the source UID can't be used against INBOX afterwards.
+		// The flag travels with the message, so the woken mail arrives unread.
+		if err := e.be.ClearSeen(d.Folder, ids); err != nil {
+			e.log.Warn("clear seen before wake failed", "folder", d.Folder, "err", err)
+		}
+		if _, err := e.move(d.Folder, ids, e.f.Inbox); err != nil {
+			return err
+		}
 		if err := e.st.Unsnooze(d.Folder, d.UID); err != nil {
 			return err
 		}
+		woke++
 	}
-	e.log.Info("woke snoozed", "count", len(ids))
+	if woke > 0 {
+		e.log.Info("woke snoozed", "count", woke)
+	}
 	return nil
 }
 
 // --- helpers ---
 
-func (e *Engine) move(folder string, ids []uint32, dest string) error {
+// move moves messages and returns the server's source→dest UID mapping (may be
+// empty). Most callers ignore the map; the snooze path needs it to track the
+// new UID after consolidation.
+func (e *Engine) move(folder string, ids []uint32, dest string) (map[uint32]uint32, error) {
 	if len(ids) == 0 {
-		return nil
+		return nil, nil
 	}
 	e.log.Info("move", "from", folder, "to", dest, "count", len(ids))
 	return e.be.Move(folder, ids, dest)
